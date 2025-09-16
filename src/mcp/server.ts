@@ -18,10 +18,10 @@ async function start() {
   const mcp = new McpServer({ name: NAME, version: VERSION });
 
   // Initialize services
-  const db = new Database({});
+  const db = new Database({dbDir: process.env.TFA_DATA_STORE_PATH});
   await db.init();
   const taskSvc = new TaskService(db);
-  const embedder = selectEmbedderFromEnv();
+  const embedder = await selectEmbedderFromEnv();
   const ks = new KnowledgeService(db, embedder, { autoEmbed: true });
 
   // Four task-list operations (typed stubs for now)
@@ -93,6 +93,67 @@ async function start() {
     }
   );
 
+  // Job management tools
+  mcp.registerTool(
+    "create_job",
+    {
+      description: "Create a new job. Returns the created job.",
+      inputSchema: {
+        id: z.string(),
+        title: z.string().optional(),
+        instructions: z.string().optional(),
+        params: z.unknown().optional(),
+        status: z.string().optional()
+      }
+    },
+    async (args) => {
+      const job = taskSvc.createJob(args as any);
+      return { content: [{ type: 'text', text: JSON.stringify(job) }] };
+    }
+  );
+
+  mcp.registerTool(
+    "get_job",
+    {
+      description: "Get a job by ID.",
+      inputSchema: { id: z.string() }
+    },
+    async ({ id }) => {
+      const job = taskSvc.getJob(id);
+      return { content: [{ type: 'text', text: job ? JSON.stringify(job) : 'no job' }] };
+    }
+  );
+
+  mcp.registerTool(
+    "update_job",
+    {
+      description: "Update an existing job.",
+      inputSchema: {
+        id: z.string(),
+        title: z.string().optional(),
+        instructions: z.string().optional(),
+        params: z.unknown().optional(),
+        status: z.string().optional()
+      }
+    },
+    async ({ id, ...updates }) => {
+      const job = taskSvc.updateJob(id, updates);
+      return { content: [{ type: 'text', text: JSON.stringify(job) }] };
+    }
+  );
+
+  mcp.registerTool(
+    "list_jobs",
+    {
+      description: "List jobs, optionally filtered by status.",
+      inputSchema: { status: z.string().optional() }
+    },
+    async ({ status }) => {
+      const jobs = taskSvc.listJobs(status ? { status } : undefined);
+      return { content: [{ type: 'text', text: JSON.stringify(jobs) }] };
+    }
+  );
+
   // Knowledge Service tools
   mcp.registerTool(
     "ks:add_atom",
@@ -106,8 +167,12 @@ async function start() {
       }
     },
     async (args) => {
-      const id = await ks.addAtom(args as any);
-      return { content: [{ type: 'text', text: id }] };
+      try {
+        const id = await ks.addAtom(args as any);
+        return { content: [{ type: 'text', text: id }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: error.message, isError: true }) }], isError: true };
+      }
     }
   );
 
@@ -140,8 +205,12 @@ async function start() {
       }
     },
     async ({ query, topK, prefilter }) => {
-      const hits = await ks.searchText(query, { topK, prefilter });
-      return { content: [{ type: 'text', text: JSON.stringify(hits) }] };
+      try {
+        const hits = await ks.searchText(query, { topK, prefilter });
+        return { content: [{ type: 'text', text: JSON.stringify(hits) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: error.message, isError: true }) }], isError: true };
+      }
     }
   );
 
@@ -204,14 +273,25 @@ function setupSignalHandlers() {
   process.on('SIGTERM', shutdown);
 }
 
-function selectEmbedderFromEnv() {
+async function selectEmbedderFromEnv() {
   const modelId = process.env.TFA_EMBED_MODEL;
   const cacheDir = process.env.TFA_EMBED_CACHE;
   const quantized = parseBoolEnv(process.env.TFA_EMBED_QUANTIZED, true);
   const normalize = parseBoolEnv(process.env.TFA_EMBED_NORMALIZE, true);
+  
   if (modelId) {
-    return new TransformersEmbedder({ modelId, cacheDir, quantized, normalize });
+    try {
+      const embedder = new TransformersEmbedder({ modelId, cacheDir, quantized, normalize });
+      // Test initialization
+      await embedder.embed('test');
+      console.log(`✅ Using TransformersEmbedder: ${modelId}`);
+      return embedder;
+    } catch (error) {
+      console.warn(`⚠️  TransformersEmbedder failed (${error.message}), falling back to HashEmbedder`);
+    }
   }
+  
+  console.log('✅ Using HashEmbedder fallback');
   return new HashEmbedder(256);
 }
 

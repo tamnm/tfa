@@ -1,5 +1,6 @@
-import type { KnnHit } from '../types/domain.js';
-import { env } from '@xenova/transformers';
+import { pipeline, FeatureExtractionPipeline } from '@xenova/transformers';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface EmbeddingsConfig {
   modelId: string;
@@ -17,57 +18,176 @@ export interface EmbeddingsGenerator {
 
 export class TransformersEmbedder implements EmbeddingsGenerator {
   modelId: string;
-  normalize: boolean;
-  quantized: boolean;
-  private extractorPromise: Promise<any> | null = null;
-  private dim: number | null = null;
+  private extractor: FeatureExtractionPipeline | null = null;
+  private initialized: boolean = false;
+  private cacheDir: string;
+  private quantized: boolean;
+  private normalize: boolean;
 
   constructor(cfg: EmbeddingsConfig) {
-    this.modelId = cfg.modelId;
+    this.modelId = cfg.modelId || 'Xenova/all-MiniLM-L6-v2';
+    this.cacheDir = cfg.cacheDir || '.ksr/models';
+    this.quantized = cfg.quantized !== false;
     this.normalize = cfg.normalize !== false;
-    this.quantized = cfg.quantized !== false; // prefer quantized default
-    if (cfg.cacheDir) {
-      // @xenova/transformers uses env.LOCAL_MODEL_DIR for local path
-      // and env.CACHE_DIR for hub cache. Set both for portability.
-      (env as any).CACHE_DIR = cfg.cacheDir;
-      (env as any).LOCAL_MODEL_DIR = cfg.cacheDir;
+  }
+
+  private async init(): Promise<void> {
+    if (this.initialized) return;
+    
+    if (!fs.existsSync(this.cacheDir)) {
+      fs.mkdirSync(this.cacheDir, { recursive: true });
+    }
+
+    try {
+      this.extractor = await pipeline(
+        'feature-extraction',
+        this.modelId,
+        {
+          quantized: this.quantized,
+          cache_dir: this.cacheDir
+        }
+      );
+    } catch (error) {
+      console.warn(`Pipeline fetch failed: ${error.message}`);
+      console.log('Attempting direct download...');
+      
+      await this.downloadModelDirect();
+      
+      // Retry pipeline with local files
+      this.extractor = await pipeline(
+        'feature-extraction',
+        this.modelId,
+        {
+          quantized: this.quantized,
+          cache_dir: this.cacheDir,
+          local_files_only: true
+        }
+      );
+    }
+    
+    this.initialized = true;
+  }
+
+  private async downloadModelDirect(): Promise<void> {
+    const modelPath = path.join(this.cacheDir, this.modelId);
+    if (!fs.existsSync(modelPath)) {
+      fs.mkdirSync(modelPath, { recursive: true });
+    }
+
+    // Pre-configured URLs for all-MiniLM-L6-v2
+    const baseUrl = process.env.TFA_MODEL_BASE_URL || 'https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main';
+    const files = [
+      'config.json',
+      'tokenizer.json', 
+      'tokenizer_config.json',
+      this.quantized ? 'onnx/model_quantized.onnx' : 'onnx/model.onnx'
+    ];
+
+    for (const file of files) {
+      const filePath = path.join(modelPath, file);
+      const fileDir = path.dirname(filePath);
+      
+      if (!fs.existsSync(fileDir)) {
+        fs.mkdirSync(fileDir, { recursive: true });
+      }
+      
+      if (!fs.existsSync(filePath)) {
+        console.log(`Downloading ${file}...`);
+        await this.downloadFile(`${baseUrl}/${file}`, filePath);
+      }
     }
   }
 
-  private async getExtractor() {
-    if (!this.extractorPromise) {
-      const { pipeline } = await import('@xenova/transformers');
-      this.extractorPromise = pipeline('feature-extraction', this.modelId, { quantized: this.quantized });
-    }
-    return this.extractorPromise;
+  private async downloadFile(url: string, filePath: string): Promise<void> {
+    const https = await import('https');
+    const http = await import('http');
+    
+    return new Promise((resolve, reject) => {
+      const client = url.startsWith('https:') ? https : http;
+      
+      const request = client.get(url, (response) => {
+        if (response.statusCode === 302 || response.statusCode === 301) {
+          // Handle redirect
+          return this.downloadFile(response.headers.location!, filePath)
+            .then(resolve)
+            .catch(reject);
+        }
+        
+        if (response.statusCode !== 200) {
+          reject(new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`));
+          return;
+        }
+        
+        const writeStream = fs.createWriteStream(filePath);
+        response.pipe(writeStream);
+        
+        writeStream.on('finish', () => {
+          writeStream.close();
+          resolve();
+        });
+        
+        writeStream.on('error', reject);
+      });
+      
+      request.on('error', reject);
+      request.setTimeout(30000, () => {
+        request.destroy();
+        reject(new Error('Download timeout'));
+      });
+    });
   }
 
   async getDim(): Promise<number> {
-    if (this.dim) return this.dim;
-    const v = await this.embed('test');
-    this.dim = v.length;
-    return this.dim;
+    if (!this.initialized) await this.init();
+    const result = await this.extractor!('test', { pooling: 'mean', normalize: this.normalize });
+    return Array.from(result.data).length;
   }
 
   async embed(text: string): Promise<Float32Array> {
-    const extractor = await this.getExtractor();
-    // Many models support pooling + normalize in the pipeline call
-    const out = await extractor(text, { pooling: 'mean', normalize: this.normalize });
-    // Ensure Float32Array
-    const data: number[] | Float32Array = out?.data || out;
-    return data instanceof Float32Array ? data : new Float32Array(data);
+    if (!this.initialized) await this.init();
+    
+    const result = await this.extractor!(text, {
+      pooling: 'mean',
+      normalize: this.normalize
+    });
+    
+    return new Float32Array(Array.from(result.data));
   }
 
   async embedBatch(texts: string[]): Promise<Float32Array[]> {
-    const extractor = await this.getExtractor();
-    const out = await extractor(texts, { pooling: 'mean', normalize: this.normalize });
-    const arr = out?.data || out;
-    if (Array.isArray(arr)) {
-      return arr.map((row: any) => row instanceof Float32Array ? row : new Float32Array(row));
+    if (!this.initialized) await this.init();
+    
+    const embeddings: Float32Array[] = [];
+    for (const text of texts) {
+      const embedding = await this.embed(text);
+      embeddings.push(embedding);
     }
-    // Single vector fallback
-    const v = arr instanceof Float32Array ? arr : new Float32Array(arr);
-    return [v];
+    return embeddings;
+  }
+
+  static cosineSimilarity(vecA: Float32Array | number[], vecB: Float32Array | number[]): number {
+    if (vecA.length !== vecB.length) {
+      throw new Error('Vectors must have the same length');
+    }
+
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+
+    for (let i = 0; i < vecA.length; i++) {
+      dotProduct += vecA[i] * vecB[i];
+      normA += vecA[i] * vecA[i];
+      normB += vecB[i] * vecB[i];
+    }
+
+    normA = Math.sqrt(normA);
+    normB = Math.sqrt(normB);
+
+    if (normA === 0 || normB === 0) {
+      return 0;
+    }
+
+    return dotProduct / (normA * normB);
   }
 }
 
@@ -96,4 +216,3 @@ export class HashEmbedder implements EmbeddingsGenerator {
     return v;
   }
 }
-

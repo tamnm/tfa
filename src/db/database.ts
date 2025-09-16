@@ -1,4 +1,4 @@
-// Portable metadata DB (sql.js) + vector ANN (hnswlib-node)
+// Portable metadata DB (sql.js) + vector search (brute-force)
 // Schema matches simple v1 ERD (atoms/tags/embeddings + tasks)
 
 import { promises as fs } from 'node:fs';
@@ -30,22 +30,18 @@ function cosineSim(a: Float32Array, b: Float32Array, normA: number, normB: numbe
 
 export class Database {
   dbFile: string;
-  vectorDir: string;
   sql: any;
   SQL: any;
-  hnsw: Map<string, any> | null;
 
-  constructor(opts: { dbFile?: string; vectorDir?: string } = {}) {
-    this.dbFile = opts.dbFile || resolve(process.cwd(), 'data', 'kr.sqlite');
-    this.vectorDir = opts.vectorDir || resolve(process.cwd(), 'data', 'vectors');
+  constructor(opts: { dbDir?:string } = {}) {
+    const dir = opts.dbDir || resolve(process.cwd(), 'data');
+    this.dbFile =  resolve(dir, 'db.sqlite' );
     this.sql = null; // SQL.js Database instance
     this.SQL = null; // SQL.js module
-    this.hnsw = null; // Map model -> { index, dim, labels: Map(subjectId->label), rev: Map(label->subjectId) }
   }
 
   async init() {
     await fs.mkdir(dirname(this.dbFile), { recursive: true });
-    await fs.mkdir(this.vectorDir, { recursive: true });
 
     const initSqlJs: any = (await import('sql.js')).default;
     this.SQL = await initSqlJs({
@@ -64,9 +60,6 @@ export class Database {
 
     // try to set pragmas helpful for performance
     try { this.sql.exec('PRAGMA journal_mode=MEMORY; PRAGMA synchronous=OFF;'); } catch {}
-
-    // init hnsw map; lazy load per model
-    this.hnsw = new Map();
   }
 
   _migrate() {
@@ -381,7 +374,7 @@ export class Database {
     });
   }
 
-  // ---------- Embeddings (sql.js store + optional HNSW) ----------
+  // ---------- Embeddings (sql.js store + brute-force search) ----------
   async upsertEmbedding({ subjectId, model, vector, contentHash }: { subjectId: string; model: string; vector: Float32Array | number[]; contentHash?: string }): Promise<EmbeddingSummary> {
     if (!subjectId || !model) throw new Error('subjectId and model are required');
     const vec = ensureFloat32(vector);
@@ -396,47 +389,15 @@ export class Database {
     stmt.run([subjectId, model, dim, Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength), norm, contentHash ?? null, nowIso()]);
     stmt.free();
     await this.persist();
-
-    // update HNSW if available
-    await this._ensureHnsw(model, dim);
-    const h = this.hnsw.get(model);
-    if (h?.index) {
-      const label = h.labels.get(subjectId) ?? (h.labels.set(subjectId, h.nextLabel), h.rev.set(h.nextLabel, subjectId), h.nextLabel++);
-      // hnswlib-node expects Float32Array
-      try {
-        if (h.added.has(label)) h.index.markDeleted(label);
-        h.index.addPoint(vec, label);
-        h.added.add(label);
-        await this._saveHnsw(model);
-      } catch (e) {
-        // Rebuild if add fails due to internal constraints
-        await this._rebuildHnsw(model);
-      }
-    }
     return { subjectId, model, dim, norm };
   }
 
   async searchEmbeddings({ model, vector, topK = 20, prefilter }: { model: string; vector: Float32Array | number[]; topK?: number; prefilter?: { type?: string; tags?: string[]; sourceLike?: string; origin?: string; target?: string } } = { model: '', vector: new Float32Array() }): Promise<KnnHit[]> {
     if (!model) throw new Error('model is required');
     const vec = ensureFloat32(vector);
-    const dim = vec.length;
-    await this._ensureHnsw(model, dim);
-    const h = this.hnsw.get(model);
-    let candidates = [];
-    if (h?.index && h.labels.size > 0) {
-      try {
-        const { neighbors, distances } = h.index.searchKnn(vec, Math.min(topK * 5, h.labels.size));
-        for (let i = 0; i < neighbors.length; i++) {
-          const subjectId = h.rev.get(neighbors[i]);
-          if (subjectId) candidates.push({ subjectId, score: 1 - distances[i] }); // cosine distance -> sim
-        }
-      } catch {
-        // fall back to brute force
-        candidates = await this._bruteForceKnn(model, vec, topK * 5);
-      }
-    } else {
-      candidates = await this._bruteForceKnn(model, vec, topK * 5);
-    }
+    
+    // Use brute-force search
+    let candidates = await this._bruteForceKnn(model, vec, topK * 5);
 
     // Optional SQL prefiltering
     if (prefilter && candidates.length) {
@@ -467,96 +428,13 @@ export class Database {
     if (!subjectId) throw new Error('subjectId is required');
     if (model) {
       this.sql.exec(`DELETE FROM embeddings WHERE subject_id=$id AND model=$m;`, { $id: subjectId, $m: model });
-      const h = this.hnsw.get(model);
-      if (h && h.labels.has(subjectId)) {
-        const label = h.labels.get(subjectId);
-        try { h.index.markDeleted(label); } catch {}
-        h.labels.delete(subjectId); h.rev.delete(label); h.added.delete(label);
-        await this._saveHnsw(model);
-      }
     } else {
       this.sql.exec(`DELETE FROM embeddings WHERE subject_id=$id;`, { $id: subjectId });
-      for (const [m, h] of this.hnsw) {
-        if (h.labels.has(subjectId)) {
-          const label = h.labels.get(subjectId);
-          try { h.index.markDeleted(label); } catch {}
-          h.labels.delete(subjectId); h.rev.delete(label); h.added.delete(label);
-          await this._saveHnsw(m);
-        }
-      }
     }
     await this.persist();
   }
 
-  // ---------- HNSW internals ----------
-  async _ensureHnsw(model: string, dim: number): Promise<void> {
-    if (this.hnsw.has(model)) return;
-    // try loading hnswlib-node; if missing, skip
-    let hnswlib: any;
-    try {
-      hnswlib = await import('hnswlib-node');
-    } catch {
-      this.hnsw.set(model, { index: null, dim, labels: new Map(), rev: new Map(), added: new Set(), nextLabel: 0 });
-      return;
-    }
-    const space = 'cosine';
-    let index: any = null;
-    try {
-      index = new hnswlib.HierarchicalNSW(space, dim);
-    } catch {
-      // If the constructor is not available (CJS/ESM interop issues), skip HNSW and rely on brute-force
-      this.hnsw.set(model, { index: null, dim, labels: new Map(), rev: new Map(), added: new Set(), nextLabel: 0 });
-      return;
-    }
 
-    // Load label map
-    const mapPath = resolve(this.vectorDir, `${sanitize(model)}.labels.json`);
-    let labels = new Map();
-    let rev = new Map();
-    let nextLabel = 0;
-    try {
-      const txt = await fs.readFile(mapPath, 'utf8');
-      const obj = JSON.parse(txt);
-      for (const [lblStr, id] of Object.entries(obj.rev || {})) rev.set(Number(lblStr), id);
-      for (const [id, lbl] of Object.entries(obj.labels || {})) labels.set(id, Number(lbl));
-      nextLabel = obj.nextLabel || 0;
-    } catch {}
-
-    const idxPath = resolve(this.vectorDir, `${sanitize(model)}.hnsw`);
-    let loaded = false;
-    try {
-      await fs.access(idxPath);
-      index.readIndex(idxPath, dim);
-      loaded = true;
-    } catch {}
-
-    if (!loaded) {
-      // build from SQL embeddings for this model
-      const res = this.sql.exec(`SELECT subject_id, dim, vector FROM embeddings WHERE model=$m;`, { $m: model });
-      const rows = tableToObjects(res[0]);
-      if (rows.length) {
-        index.initIndex(rows.length);
-        let labelCounter = nextLabel;
-        for (const r of rows) {
-          const subjectId = r.subject_id;
-          let label = labels.get(subjectId);
-          if (label == null) {
-            label = labelCounter++;
-            labels.set(subjectId, label);
-            rev.set(label, subjectId);
-          }
-          const vec = new Float32Array(Buffer.from(r.vector).buffer, 0, r.dim);
-          index.addPoint(vec, label);
-        }
-        nextLabel = labelCounter;
-        await this._saveHnswMaps(model, labels, rev, nextLabel);
-        await this._saveIndex(index, idxPath);
-      } else {
-        index.initIndex(1); // minimal to allow additions later
-      }
-    }
-    this.hnsw.set(model, { index, dim, labels, rev, added: new Set(), nextLabel });
-  }
 
   async _bruteForceKnn(model: string, queryVec: Float32Array, k: number): Promise<KnnHit[]> {
     const res = this.sql.exec(`SELECT subject_id, dim, vector, norm FROM embeddings WHERE model=$m;`, { $m: model });
@@ -572,34 +450,7 @@ export class Database {
     return sims.slice(0, k);
   }
 
-  async _saveHnsw(model: string): Promise<void> {
-    const h = this.hnsw.get(model);
-    if (!h?.index) return;
-    const idxPath = resolve(this.vectorDir, `${sanitize(model)}.hnsw`);
-    await this._saveIndex(h.index, idxPath);
-    await this._saveHnswMaps(model, h.labels, h.rev, h.nextLabel);
-  }
 
-  async _rebuildHnsw(model: string): Promise<void> {
-    // Drop and rebuild from SQL embeddings
-    this.hnsw.delete(model);
-    await this._ensureHnsw(model, 0);
-  }
-
-  async _saveIndex(index: any, path: string): Promise<void> {
-    // hnswlib-node writes synchronously
-    index.writeIndex(path);
-  }
-
-  async _saveHnswMaps(model: string, labels: Map<string, number>, rev: Map<number, string>, nextLabel: number): Promise<void> {
-    const mapPath = resolve(this.vectorDir, `${sanitize(model)}.labels.json`);
-    const obj = {
-      labels: Object.fromEntries(labels.entries()),
-      rev: Object.fromEntries(rev.entries()),
-      nextLabel
-    };
-    await fs.writeFile(mapPath, JSON.stringify(obj, null, 2));
-  }
 }
 
 function rowToObject<T = any>(table: any): T {
