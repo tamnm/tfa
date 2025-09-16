@@ -9,7 +9,7 @@ let tmpDir, db;
 
 before(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'tfa-dbq-'));
-  db = new Database({ dbFile: join(tmpDir, 'kr.sqlite'), vectorDir: join(tmpDir, 'vec') });
+  db = new Database({ dbDir: tmpDir });
   await db.init();
   // Seed atoms and tags
   const a1 = db.insertAtom({ type: 'Entity', text_or_payload: 'Billing page', origin: 'manual' });
@@ -54,4 +54,3 @@ test('db.query: join with tags', async () => {
 test('db.query: rejects non-SELECT', async () => {
   assert.throws(() => db.query('DELETE FROM atoms WHERE 1=1')), /Only SELECT/;
 });
-

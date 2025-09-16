@@ -10,7 +10,7 @@ let tmpDir, db;
 
 before(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'tfa-emb-'));
-  db = new Database({ dbFile: join(tmpDir, 'kr.sqlite'), vectorDir: join(tmpDir, 'vec') });
+  db = new Database({ dbDir: tmpDir });
   await db.init();
 });
 
@@ -33,4 +33,3 @@ test('hash embedder: similar texts rank higher', async () => {
   assert.equal(res.length, 2);
   assert.equal(res[0].subjectId, a);
 });
-

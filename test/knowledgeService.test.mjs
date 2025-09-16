@@ -11,7 +11,7 @@ let tmpDir, db, ks, emb;
 
 before(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'tfa-ks-'));
-  db = new Database({ dbFile: join(tmpDir, 'kr.sqlite'), vectorDir: join(tmpDir, 'vec') });
+  db = new Database({ dbDir: tmpDir });
   await db.init();
   emb = new HashEmbedder(256);
   ks = new KnowledgeService(db, emb);

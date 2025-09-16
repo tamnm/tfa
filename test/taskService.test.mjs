@@ -10,7 +10,7 @@ let tmpDir, db, svc;
 
 before(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'tfa-tsvc-'));
-  db = new Database({ dbFile: join(tmpDir, 'kr.sqlite'), vectorDir: join(tmpDir, 'vec') });
+  db = new Database({ dbDir: tmpDir });
   await db.init();
   svc = new TaskService(db);
 });

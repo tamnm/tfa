@@ -6,15 +6,11 @@ import { join } from 'node:path';
 import Database from '../dist/db/database.js';
 
 let tmpDir;
-let dbFile;
-let vecDir;
 let db;
 
 before(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'tfa-db-'));
-  dbFile = join(tmpDir, 'kr.sqlite');
-  vecDir = join(tmpDir, 'vectors');
-  db = new Database({ dbFile, vectorDir: vecDir });
+  db = new Database({ dbDir: tmpDir });
   await db.init();
 });
 
