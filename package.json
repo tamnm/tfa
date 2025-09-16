@@ -7,7 +7,7 @@
     "mcp-tfa": "dist/mcp/server.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-prompts.mjs",
     "clean": "rm -rf dist",
     "mcp": "npm run build && node dist/mcp/server.js",
     "test": "npm run build && node --test",
