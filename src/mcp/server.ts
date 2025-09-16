@@ -10,6 +10,7 @@ import { Database } from "../db/database.js";
 import TaskService from "../services/taskService.js";
 import KnowledgeService from "../services/knowledgeService.js";
 import { HashEmbedder, TransformersEmbedder } from "../embedding/embeddings.js";
+import { initializeRuleDirectory } from "../prompts/ruleInitializer.js";
 
 const NAME = "tfa-mcp";
 const VERSION = "0.1.0";
@@ -23,6 +24,8 @@ async function start() {
   const taskSvc = new TaskService(db);
   const embedder = await selectEmbedderFromEnv();
   const ks = new KnowledgeService(db, embedder, { autoEmbed: true });
+
+  await initializeRuleDirectory();
 
   // Four task-list operations (typed stubs for now)
   mcp.registerTool(

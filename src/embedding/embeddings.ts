@@ -7,6 +7,7 @@ export interface EmbeddingsConfig {
   cacheDir?: string;
   normalize?: boolean;
   quantized?: boolean;
+  pipelineFactory?: typeof pipeline;
 }
 
 export interface EmbeddingsGenerator {
@@ -23,12 +24,14 @@ export class TransformersEmbedder implements EmbeddingsGenerator {
   private cacheDir: string;
   private quantized: boolean;
   private normalize: boolean;
+  private pipelineFactory: typeof pipeline;
 
   constructor(cfg: EmbeddingsConfig) {
     this.modelId = cfg.modelId || 'Xenova/all-MiniLM-L6-v2';
     this.cacheDir = cfg.cacheDir || '.ksr/models';
     this.quantized = cfg.quantized !== false;
     this.normalize = cfg.normalize !== false;
+    this.pipelineFactory = cfg.pipelineFactory ?? pipeline;
   }
 
   private async init(): Promise<void> {
@@ -39,7 +42,7 @@ export class TransformersEmbedder implements EmbeddingsGenerator {
     }
 
     try {
-      this.extractor = await pipeline(
+      this.extractor = await this.pipelineFactory(
         'feature-extraction',
         this.modelId,
         {
@@ -54,7 +57,7 @@ export class TransformersEmbedder implements EmbeddingsGenerator {
       await this.downloadModelDirect();
       
       // Retry pipeline with local files
-      this.extractor = await pipeline(
+      this.extractor = await this.pipelineFactory(
         'feature-extraction',
         this.modelId,
         {
