@@ -28,7 +28,7 @@ export class TransformersEmbedder implements EmbeddingsGenerator {
 
   constructor(cfg: EmbeddingsConfig) {
     this.modelId = cfg.modelId || 'Xenova/all-MiniLM-L6-v2';
-    this.cacheDir = cfg.cacheDir || '.ksr/models';
+    this.cacheDir = cfg.cacheDir || '.tfa/models';
     this.quantized = cfg.quantized !== false;
     this.normalize = cfg.normalize !== false;
     this.pipelineFactory = cfg.pipelineFactory ?? pipeline;

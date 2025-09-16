@@ -34,7 +34,7 @@ export class Database {
   SQL: any;
 
   constructor(opts: { dbDir?:string } = {}) {
-    const dir = opts.dbDir || resolve(process.cwd(), 'data');
+    const dir = opts.dbDir || resolve(process.cwd(), '.tfa', 'data');
     this.dbFile =  resolve(dir, 'db.sqlite' );
     this.sql = null; // SQL.js Database instance
     this.SQL = null; // SQL.js module
