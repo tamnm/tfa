@@ -13,30 +13,30 @@ Core Principles
 Note: Atom types, tag conventions, and relation predicates are defined in knowledge_instruction.md. Do not duplicate them here.
 
 Rule of Thumb: SQL vs Semantic Search
-- Use SQL (ks:query) when you know the shape (precision, speed):
+- Use SQL (ks_query) when you know the shape (precision, speed):
   - Exact path/scope: source LIKE 'src/api/%', or scope tags (scope:repo:…, scope:service:…).
   - Known categories: cat:coding-standard, cat:security-policy, cat:runbook.
   - Structural slices: type='Entity' with tags (domain, layer, kind); Relations by predicate='calls', 'imports', etc.
   - Audits/coverage: counts, specific lists, or joins (e.g., “all endpoints without docs”).
-- Use semantic (ks:search_text) when you need recall/discovery:
+- Use semantic (ks_search_text) when you need recall/discovery:
   - Conceptual questions with varied wording (e.g., “authz boundaries”, “rate limit policy”).
   - Weak or unknown tags/structure; need “nearby” material.
   - First‑pass exploration—then verify via SQL + provenance.
 - Hybrid pattern (best of both):
-  - Start with SQL prefilter (type/tags/source), then semantic re‑rank via ks:search_text with the same prefilter.
+  - Start with SQL prefilter (type/tags/source), then semantic re‑rank via ks_search_text with the same prefilter.
   - If strict inclusion is required (e.g., under a path), keep the sourceLike filter in semantic search.
 
 Operational Loop
 1) Clarify Scope (minimize ambiguity)
 - Identify target domain/layer/kind and any key entities or files.
 - Run a focused SELECT to see what exists:
-  - ks:query → filter by type + tags + source path.
+  - ks_query → filter by type + tags + source path.
   - If the set is empty or too small, add a broader prefilter then widen.
 - Check for existing atoms before insertion to prevent duplicates.
 
 2) Enrich Context (semantic first, then verify)
-- ks:search_text with prefilter { type, tags, sourceLike } to find candidates.
-- Parse results, fetch atoms by id (via ks:query) to read provenance and text_or_payload.
+- ks_search_text with prefilter { type, tags, sourceLike } to find candidates.
+- Parse results, fetch atoms by id (via ks_query) to read provenance and text_or_payload.
 - If text_or_payload is low quality, add an Insight with better summary and evidence links.
 
 3) Clarify Assumptions (never guess)
@@ -50,11 +50,11 @@ Operational Loop
 
 5) Re‑embedding Hygiene
 - Re‑embed atoms whose text_or_payload changed meaningfully.
-- Use ks:reembed_atom for single updates; ks:reembed_all with filters for large edits (e.g., domain‑wide).
+- Use ks_reembed_atom for single updates; ks_reembed_all with filters for large edits (e.g., domain‑wide).
 
 Query Strategy (SELECT before Search)
-- Step A (precise slice): ks:query with WHERE clauses for type, tags, source LIKE. This is the fastest way to understand coverage.
-- Step B (semantic expansion): ks:search_text for “nearby” material; always post‑filter by tags/type for precision.
+- Step A (precise slice): ks_query with WHERE clauses for type, tags, source LIKE. This is the fastest way to understand coverage.
+- Step B (semantic expansion): ks_search_text for “nearby” material; always post‑filter by tags/type for precision.
 - Step C (verification): For every claim you plan to use, ensure at least one supporting Fact/Quote/Entity with provenance.
 
 Contradiction Handling
@@ -67,9 +67,9 @@ Stop / Ask Conditions
 - If a critical claim has no evidence, stop and ask for sources or approval to inspect code/docs in a specific path.
 
 Performance & Safety
-- Batch adds (ks:add_atoms) to reduce embedding overhead.
-- Use prefilters in ks:search_text to reduce candidate set.
-- Use only SELECT in ks:query (enforced); never attempt writes via SQL.
+- Batch adds (ks_add_atoms) to reduce embedding overhead.
+- Use prefilters in ks_search_text to reduce candidate set.
+- Use only SELECT in ks_query (enforced); never attempt writes via SQL.
 
 Minimal Checklists
 - For every claim in output: has supporting atom id(s) with provenance?

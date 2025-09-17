@@ -94,15 +94,15 @@ Tags are stored in separate atom_tags table with AND logic (atoms must have ALL 
 - Keep Quotes short with precise locators; long content should be summarized in Entity/Fact and chunked elsewhere if needed.
 
 **Retrieval Guidance**
-- Broad discovery: use ks:search_text with prefilter (type/tags/sourceLike/origin/target) to constrain the space; semantic first, then verify via source/locator.
-- Precise slicing: use ks:query with tags/type/source filters for exact sets (e.g., all Entities in domain:payments). Only SELECT statements allowed.
-- All knowledge tools are prefixed with ks: (ks:add_atom, ks:search_text, ks:query, ks:reembed_atom, ks:reembed_all).
+- Broad discovery: use ks_search_text with prefilter (type/tags/sourceLike/origin/target) to constrain the space; semantic first, then verify via source/locator.
+- Precise slicing: use ks_query with tags/type/source filters for exact sets (e.g., all Entities in domain:payments). Only SELECT statements allowed.
+- All knowledge tools are prefixed with ks_ (ks_add_atom, ks_search_text, ks_query, ks_reembed_atom, ks_reembed_all).
 - Keep tagging disciplined; consistent tags make both semantic and SQL far more effective.
 
 **Re‑Embedding Guidance**
 - Auto-embedding is enabled by default when adding atoms.
 - Re-embed when text_or_payload changes or tags significantly alter meaning.
-- For localized changes, use ks:reembed_atom; for wide changes (e.g., domain-wide edits), use ks:reembed_all with filters.
+- For localized changes, use ks_reembed_atom; for wide changes (e.g., domain-wide edits), use ks_reembed_all with filters.
 - Content hashing prevents unnecessary re-embedding of unchanged text.
 - Strive for stable summaries to minimize churn; prefer updating a Fact/Entity’s text_or_payload only when meaning changes.
 
@@ -111,4 +111,4 @@ Tags are stored in separate atom_tags table with AND logic (atoms must have ALL 
 - For Entities: check by canonical name and aliases; update existing rather than create new.
 - For Facts/Relations: verify by subject + predicate + object combination.
 - For source-based atoms: query by source path + locator range before insertion.
-- Use ks:query with precise filters (source LIKE, tags, type) to check existence efficiently.
+- Use ks_query with precise filters (source LIKE, tags, type) to check existence efficiently.

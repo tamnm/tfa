@@ -42,6 +42,8 @@ export class TransformersEmbedder implements EmbeddingsGenerator {
     }
 
     try {
+      console.log(`initializing model: ${this.modelId} into ${this.cacheDir}`);
+      
       this.extractor = await this.pipelineFactory(
         'feature-extraction',
         this.modelId,

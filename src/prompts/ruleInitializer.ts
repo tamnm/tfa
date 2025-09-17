@@ -37,6 +37,7 @@ export async function initializeRuleDirectory(options: RuleInitOptions = {}): Pr
   const targetDirFromOpts = options.targetDir ?? env?.TFA_RULE_DIR;
 
   if (!targetDirFromOpts) {
+    logger.info("ℹ️  No target rule directory specified; skipping rule initialization.");
     return { status: "skipped-no-target", sourceDir: resolvedSourceDir, fileCount: 0 };
   }
 

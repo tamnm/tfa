@@ -5,12 +5,28 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 // Use SDK's Node stdio transport (path per v1.18+)
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
 import { Database } from "../db/database.js";
 import TaskService from "../services/taskService.js";
 import KnowledgeService from "../services/knowledgeService.js";
 import { HashEmbedder, TransformersEmbedder } from "../embedding/embeddings.js";
 import { initializeRuleDirectory } from "../prompts/ruleInitializer.js";
+import {
+  completeTaskInputSchema,
+  createJobInputSchema,
+  createTaskInputSchema,
+  getJobInputSchema,
+  getOpenTasksInputSchema,
+  getTaskInputSchema,
+  ksAddAtomInputSchema,
+  ksAddAtomsInputSchema,
+  ksQueryInputSchema,
+  ksReembedAllInputSchema,
+  ksReembedAtomInputSchema,
+  ksSearchTextInputSchema,
+  listJobsInputSchema,
+  updateJobInputSchema,
+  updateProgressInputSchema
+} from "./schema.js";
 
 const NAME = "tfa-mcp";
 const VERSION = "0.1.0";
@@ -32,14 +48,7 @@ async function start() {
     "create_task",
     {
       description: "Create a task. Returns the created task.",
-      inputSchema: {
-        job: z.string(),
-        type: z.string(),
-        target: z.string().optional(),
-        fingerprint: z.string().optional(),
-        description: z.string().optional(),
-        dedupe: z.boolean().optional()
-      }
+      inputSchema: createTaskInputSchema
     },
     async (args) => {
       const t = taskSvc.createTask(args as any);
@@ -51,7 +60,7 @@ async function start() {
     "get_open_tasks",
     {
       description: "List open tasks for a JOB (pending/running).",
-      inputSchema: { job: z.string().optional() }
+      inputSchema: getOpenTasksInputSchema
     },
     async ({ job }) => {
       const items = taskSvc.listOpen(job);
@@ -63,7 +72,7 @@ async function start() {
     "get_task",
     {
       description: "Get a specific task by id or the next open task.",
-      inputSchema: { id: z.string().optional(), job: z.string().optional() }
+      inputSchema: getTaskInputSchema
     },
     async ({ id, job }) => {
       const t = taskSvc.getTask({ id, job });
@@ -75,7 +84,7 @@ async function start() {
     "complete_task",
     {
       description: "Mark a task as completed.",
-      inputSchema: { id: z.string(), result: z.unknown().optional() }
+      inputSchema: completeTaskInputSchema
     },
     async ({ id, result }) => {
       const t = taskSvc.completeTask(id, result);
@@ -88,7 +97,7 @@ async function start() {
     "update_progress",
     {
       description: "Update task status/cursor/note atomically.",
-      inputSchema: { id: z.string(), status: z.string().optional(), cursor: z.unknown().optional(), note: z.string().optional() }
+      inputSchema: updateProgressInputSchema
     },
     async ({ id, status, cursor, note }) => {
       const t = taskSvc.updateProgress(id, { status, cursor, note });
@@ -101,13 +110,7 @@ async function start() {
     "create_job",
     {
       description: "Create a new job. Returns the created job.",
-      inputSchema: {
-        id: z.string(),
-        title: z.string().optional(),
-        instructions: z.string().optional(),
-        params: z.unknown().optional(),
-        status: z.string().optional()
-      }
+      inputSchema: createJobInputSchema
     },
     async (args) => {
       const job = taskSvc.createJob(args as any);
@@ -119,7 +122,7 @@ async function start() {
     "get_job",
     {
       description: "Get a job by ID.",
-      inputSchema: { id: z.string() }
+      inputSchema: getJobInputSchema
     },
     async ({ id }) => {
       const job = taskSvc.getJob(id);
@@ -131,13 +134,7 @@ async function start() {
     "update_job",
     {
       description: "Update an existing job.",
-      inputSchema: {
-        id: z.string(),
-        title: z.string().optional(),
-        instructions: z.string().optional(),
-        params: z.unknown().optional(),
-        status: z.string().optional()
-      }
+      inputSchema: updateJobInputSchema
     },
     async ({ id, ...updates }) => {
       const job = taskSvc.updateJob(id, updates);
@@ -149,7 +146,7 @@ async function start() {
     "list_jobs",
     {
       description: "List jobs, optionally filtered by status.",
-      inputSchema: { status: z.string().optional() }
+      inputSchema: listJobsInputSchema
     },
     async ({ status }) => {
       const jobs = taskSvc.listJobs(status ? { status } : undefined);
@@ -159,15 +156,10 @@ async function start() {
 
   // Knowledge Service tools
   mcp.registerTool(
-    "ks:add_atom",
+    "ks_add_atom",
     {
       description: "Add an atom (auto-embeds by default).",
-      inputSchema: {
-        type: z.string(), text_or_payload: z.string().optional(), source: z.string().optional(), locator: z.string().optional(),
-        timestamp: z.string().optional(), confidence: z.number().optional(), origin: z.string().optional(), target: z.string().optional(),
-        subject_atom_id: z.string().optional(), predicate: z.string().optional(), object_atom_id: z.string().optional(),
-        evidence_json: z.array(z.string()).optional(), refutes_atom_id: z.string().optional(), tags: z.array(z.string()).optional()
-      }
+      inputSchema: ksAddAtomInputSchema
     },
     async (args) => {
       try {
@@ -180,17 +172,10 @@ async function start() {
   );
 
   mcp.registerTool(
-    "ks:add_atoms",
+    "ks_add_atoms",
     {
       description: "Bulk add atoms (auto-embeds in batch).",
-      inputSchema: {
-        items: z.array(z.object({
-          type: z.string(), text_or_payload: z.string().optional(), source: z.string().optional(), locator: z.string().optional(),
-          timestamp: z.string().optional(), confidence: z.number().optional(), origin: z.string().optional(), target: z.string().optional(),
-          subject_atom_id: z.string().optional(), predicate: z.string().optional(), object_atom_id: z.string().optional(),
-          evidence_json: z.array(z.string()).optional(), refutes_atom_id: z.string().optional(), tags: z.array(z.string()).optional()
-        }))
-      }
+      inputSchema: ksAddAtomsInputSchema
     },
     async ({ items }) => {
       const ids = await ks.addAtoms(items as any);
@@ -199,17 +184,14 @@ async function start() {
   );
 
   mcp.registerTool(
-    "ks:search_text",
+    "ks_search_text",
     {
       description: "Semantic search over embedded atoms.",
-      inputSchema: {
-        query: z.string(), topK: z.number().optional(),
-        prefilter: z.object({ type: z.string().optional(), tags: z.array(z.string()).optional(), sourceLike: z.string().optional(), origin: z.string().optional(), target: z.string().optional() }).optional()
-      }
+      inputSchema: ksSearchTextInputSchema
     },
-    async ({ query, topK, prefilter }) => {
+    async ({ query, topK }) => {
       try {
-        const hits = await ks.searchText(query, { topK, prefilter });
+        const hits = await ks.searchText(query, { topK });
         return { content: [{ type: 'text', text: JSON.stringify(hits) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: error.message, isError: true }) }], isError: true };
@@ -218,10 +200,10 @@ async function start() {
   );
 
   mcp.registerTool(
-    "ks:query",
+    "ks_query",
     {
       description: "Run a read-only SQL SELECT over knowledge tables.",
-      inputSchema: { sql: z.string(), params: z.record(z.any()).optional() }
+      inputSchema: ksQueryInputSchema
     },
     async ({ sql, params }) => {
       const trimmed = String(sql).trim().toLowerCase();
@@ -232,10 +214,10 @@ async function start() {
   );
 
   mcp.registerTool(
-    "ks:reembed_atom",
+    "ks_reembed_atom",
     {
       description: "Regenerate embedding for a specific atom.",
-      inputSchema: { id: z.string(), text: z.string().optional() }
+      inputSchema: ksReembedAtomInputSchema
     },
     async ({ id, text }) => {
       const res = await ks.reembedAtom(id, text);
@@ -244,10 +226,10 @@ async function start() {
   );
 
   mcp.registerTool(
-    "ks:reembed_all",
+    "ks_reembed_all",
     {
       description: "Re-embed all (optionally filtered) atoms.",
-      inputSchema: { filter: z.object({ type: z.string().optional(), tags: z.array(z.string()).optional(), sourceLike: z.string().optional(), origin: z.string().optional(), target: z.string().optional() }).optional() }
+      inputSchema: ksReembedAllInputSchema
     },
     async ({ filter }) => {
       const res = await ks.reembedAll(filter);
@@ -282,16 +264,14 @@ async function selectEmbedderFromEnv() {
   const quantized = parseBoolEnv(process.env.TFA_EMBED_QUANTIZED, true);
   const normalize = parseBoolEnv(process.env.TFA_EMBED_NORMALIZE, true);
   
-  if (modelId) {
-    try {
-      const embedder = new TransformersEmbedder({ modelId, cacheDir, quantized, normalize });
-      // Test initialization
-      await embedder.embed('test');
-      console.log(`✅ Using TransformersEmbedder: ${modelId}`);
-      return embedder;
-    } catch (error) {
-      console.warn(`⚠️  TransformersEmbedder failed (${error.message}), falling back to HashEmbedder`);
-    }
+  try {
+    const embedder = new TransformersEmbedder({ modelId, cacheDir, quantized, normalize });
+    // Test initialization
+    await embedder.embed('test');
+    console.log(`✅ Using TransformersEmbedder: ${modelId}`);
+    return embedder;
+  } catch (error) {
+    console.warn(`⚠️  TransformersEmbedder failed (${error.message}), falling back to HashEmbedder`);
   }
   
   console.log('✅ Using HashEmbedder fallback');
