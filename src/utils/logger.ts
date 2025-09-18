@@ -1,4 +1,11 @@
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  statSync,
+  unlinkSync
+} from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -18,10 +25,11 @@ export interface ConsoleLoggerOptions {
 export interface FileLoggerOptions {
   enabled?: boolean;
   path?: string;
+  maxSizeBytes?: number;
+  maxFiles?: number;
 }
 
-export interface LoggerOptions {
-  overrides?: LoggerOverrides;
+export interface LoggerConfig {
   console?: ConsoleLoggerOptions;
   file?: FileLoggerOptions;
   transports?: Logger[];
@@ -29,12 +37,22 @@ export interface LoggerOptions {
 
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
 
-const OVERRIDE_KEYS = new Set(['info', 'warn', 'error', 'debug']);
+const defaultConfig: LoggerConfig = {
+  console: { enabled: false },
+  file: {
+    enabled: true,
+    path: process.env.TFA_LOG_PATH,
+    maxSizeBytes: 5 * 1024 * 1024,
+    maxFiles: 5
+  },
+  transports: []
+};
 
-function isLoggerOverrides(value: unknown): value is LoggerOverrides {
-  if (!value || typeof value !== 'object') return false;
-  return Object.keys(value as Record<string, unknown>).every(key => OVERRIDE_KEYS.has(key));
-}
+let globalConfig: LoggerConfig = {
+  console: { ...defaultConfig.console },
+  file: { ...defaultConfig.file },
+  transports: [...(defaultConfig.transports ?? [])]
+};
 
 function resolveProjectRoot(): string {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -60,9 +78,46 @@ function timestamp(): string {
 
 function appendLine(filePath: string, component: string, level: LogLevel, message: string) {
   try {
+    rotateFileIfNeeded(filePath, globalConfig.file?.maxSizeBytes, globalConfig.file?.maxFiles);
     appendFileSync(filePath, `${timestamp()} [${component}] ${level} ${message}\n`, { encoding: 'utf8' });
   } catch (error) {
     console.error(`[Logger] Failed to write log: ${(error as Error)?.message ?? error}`);
+  }
+}
+
+function rotateFileIfNeeded(filePath: string, maxSizeBytes?: number, maxFiles?: number) {
+  if (!maxSizeBytes || maxSizeBytes <= 0) return;
+
+  let size = 0;
+  try {
+    size = statSync(filePath).size;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+    throw error;
+  }
+
+  if (size < maxSizeBytes) return;
+
+  const archiveCount = Math.max(1, maxFiles ?? defaultConfig.file?.maxFiles ?? 5);
+  const oldestArchive = `${filePath}.${archiveCount}`;
+  if (existsSync(oldestArchive)) {
+    try {
+      unlinkSync(oldestArchive);
+    } catch (error) {
+      console.error(`[Logger] Failed to remove old log archive: ${(error as Error)?.message ?? error}`);
+    }
+  }
+
+  for (let index = archiveCount; index >= 1; index -= 1) {
+    const source = index === 1 ? filePath : `${filePath}.${index - 1}`;
+    const destination = `${filePath}.${index}`;
+    if (!existsSync(source)) continue;
+
+    try {
+      renameSync(source, destination);
+    } catch (error) {
+      console.error(`[Logger] Failed to rotate log file: ${(error as Error)?.message ?? error}`);
+    }
   }
 }
 
@@ -125,38 +180,46 @@ export function chainLoggers(...loggers: Logger[]): Logger {
   };
 }
 
-export function createLogger(component: string, init: LoggerOptions | LoggerOverrides = {}): Logger {
-  const options: LoggerOptions = isLoggerOverrides(init)
-    ? { overrides: init as LoggerOverrides }
-    : (init as LoggerOptions);
+export function configureLogger(config: LoggerConfig) {
+  globalConfig = {
+    console: { enabled: config.console?.enabled ?? globalConfig.console?.enabled ?? true },
+    file: {
+      enabled: config.file?.enabled ?? globalConfig.file?.enabled ?? true,
+      path: config.file?.path ?? globalConfig.file?.path ?? process.env.TFA_LOG_PATH,
+      maxSizeBytes:
+        config.file?.maxSizeBytes ?? globalConfig.file?.maxSizeBytes ?? defaultConfig.file?.maxSizeBytes,
+      maxFiles: config.file?.maxFiles ?? globalConfig.file?.maxFiles ?? defaultConfig.file?.maxFiles
+    },
+    transports: config.transports ?? globalConfig.transports ?? []
+  };
+}
 
-  const overrides = options.overrides ?? (isLoggerOverrides(init) ? (init as LoggerOverrides) : undefined);
-
+export function createLogger(component: string, overrides: LoggerOverrides = {}): Logger {
   const transports: Logger[] = [];
-  const consoleEnabled = options.console?.enabled ?? true;
-  const fileEnabled = options.file?.enabled ?? true;
+  const consoleEnabled = globalConfig.console?.enabled ?? true;
+  const fileEnabled = globalConfig.file?.enabled ?? true;
 
   if (consoleEnabled) transports.push(createConsoleLogger(component));
-  if (fileEnabled) transports.push(createFileLogger(component, options.file?.path));
-  if (options.transports?.length) transports.push(...options.transports);
+  if (fileEnabled) transports.push(createFileLogger(component, globalConfig.file?.path));
+  if (globalConfig.transports?.length) transports.push(...globalConfig.transports);
 
   const combined = transports.length ? chainLoggers(...transports) : createConsoleLogger(component);
 
   return {
     info(message: string) {
-      if (overrides?.info) overrides.info(message);
+      if (overrides.info) overrides.info(message);
       else combined.info(message);
     },
     warn(message: string) {
-      if (overrides?.warn) overrides.warn(message);
+      if (overrides.warn) overrides.warn(message);
       else combined.warn(message);
     },
     error(message: string) {
-      if (overrides?.error) overrides.error(message);
+      if (overrides.error) overrides.error(message);
       else combined.error(message);
     },
     debug(message: string) {
-      if (overrides?.debug) overrides.debug(message);
+      if (overrides.debug) overrides.debug(message);
       else combined.debug?.(message);
     }
   };

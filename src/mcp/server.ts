@@ -10,7 +10,7 @@ import TaskService from "../services/taskService.js";
 import KnowledgeService from "../services/knowledgeService.js";
 import { HashEmbedder, TransformersEmbedder } from "../embedding/embeddings.js";
 import { initializeRuleDirectory } from "../prompts/ruleInitializer.js";
-import { createLogger } from "../utils/logger.js";
+import { configureLogger, createLogger } from "../utils/logger.js";
 import {
   completeTaskInputSchema,
   createJobInputSchema,
@@ -31,7 +31,9 @@ import {
 
 const NAME = "tfa-mcp";
 const VERSION = "0.1.0";
-const serverLogger = createLogger('Server', {console: {enabled: false}, file: {enabled: true}});
+
+configureLogger({ console: { enabled: false }, file: { enabled: true } });
+const serverLogger = createLogger('Server');
 
 async function start() {
   const mcp = new McpServer({ name: NAME, version: VERSION });
