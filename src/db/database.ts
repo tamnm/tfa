@@ -2,8 +2,10 @@
 // Schema matches simple v1 ERD (atoms/tags/embeddings + tasks)
 
 import { promises as fs } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, isAbsolute } from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { createLogger, Logger } from '../utils/logger.js';
 import type { AtomRow, EmbeddingSummary, Job, KnnHit, Task, TaskNote } from '../types/domain.js';
 
 const requireCJS = createRequire(import.meta.url);
@@ -32,12 +34,21 @@ export class Database {
   dbFile: string;
   sql: any;
   SQL: any;
+  private logger: Logger;
 
-  constructor(opts: { dbDir?:string } = {}) {
-    const dir = opts.dbDir || resolve(process.cwd(), '.tfa', 'data');
+  constructor(opts: { dbDir?:string; logger?: Logger } = {}) {
+    const moduleDir = dirname(fileURLToPath(import.meta.url));
+    const projectRoot = resolve(moduleDir, '..', '..');
+    const configuredDir = opts.dbDir;
+    const dir = configuredDir
+      ? (isAbsolute(configuredDir) ? configuredDir : resolve(projectRoot, configuredDir))
+      : resolve(projectRoot, '.tfa', 'data');
     this.dbFile =  resolve(dir, 'db.sqlite' );
     this.sql = null; // SQL.js Database instance
     this.SQL = null; // SQL.js module
+    this.logger = opts.logger ?? createLogger('Database');
+    this.logger.info(`using data directory: ${dir}`);
+    this.logger.info(`SQLite path resolved to: ${this.dbFile}`);
   }
 
   async init() {

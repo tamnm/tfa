@@ -1,15 +1,13 @@
 import { copyFile, mkdir, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createLogger, Logger } from "../utils/logger.js";
 
 export type RuleInitStatus = "skipped-no-target" | "missing-source" | "invalid-source" | "initialized";
 
 export interface RuleInitOptions {
   env?: NodeJS.ProcessEnv;
-  logger?: {
-    info?: (message: string) => void;
-    warn?: (message: string) => void;
-  };
+  logger?: Partial<Logger>;
   sourceDir?: string;
   targetDir?: string;
 }
@@ -21,27 +19,32 @@ export interface RuleInitResult {
   fileCount: number;
 }
 
-const defaultLogger = {
-  info: console.log.bind(console),
-  warn: console.warn.bind(console)
-};
-
 export async function initializeRuleDirectory(options: RuleInitOptions = {}): Promise<RuleInitResult> {
   const env = options.env ?? process.env;
-  const logger = {
-    info: options.logger?.info ?? defaultLogger.info,
-    warn: options.logger?.warn ?? defaultLogger.warn
-  };
+  const logger = createLogger("Rules", options.logger);
 
-  const resolvedSourceDir = options.sourceDir ?? resolveDefaultSourceDir();
-  const targetDirFromOpts = options.targetDir ?? env?.TFA_RULE_DIR;
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const projectRoot = path.resolve(moduleDir, '..', '..');
+
+  const sourceDirFromOpts = options.sourceDir;
+  const resolvedSourceDir = sourceDirFromOpts
+    ? (path.isAbsolute(sourceDirFromOpts) ? sourceDirFromOpts : path.resolve(projectRoot, sourceDirFromOpts))
+    : resolveDefaultSourceDir();
+
+  const envTarget = env?.TFA_RULE_DIR;
+  const defaultTarget = options.env === undefined ? path.resolve(projectRoot, '.tfa', 'prompts') : undefined;
+  const targetDirFromOpts = options.targetDir ?? envTarget ?? defaultTarget;
 
   if (!targetDirFromOpts) {
     logger.info("ℹ️  No target rule directory specified; skipping rule initialization.");
     return { status: "skipped-no-target", sourceDir: resolvedSourceDir, fileCount: 0 };
   }
 
-  const resolvedTargetDir = path.resolve(targetDirFromOpts);
+  const resolvedTargetDir = path.isAbsolute(targetDirFromOpts)
+    ? targetDirFromOpts
+    : path.resolve(projectRoot, targetDirFromOpts);
+  logger.info(`ℹ️  Rule source directory resolved to: ${resolvedSourceDir}`);
+  logger.info(`ℹ️  Rule target directory resolved to: ${resolvedTargetDir}`);
   await mkdir(resolvedTargetDir, { recursive: true });
 
   let sourceStats;
@@ -70,7 +73,7 @@ function resolveDefaultSourceDir(): string {
   return path.resolve(moduleDir, "./rules");
 }
 
-async function copyRuleContents(sourceDir: string, targetDir: string, logger: { warn: (message: string) => void }): Promise<number> {
+async function copyRuleContents(sourceDir: string, targetDir: string, logger: Logger): Promise<number> {
   await mkdir(targetDir, { recursive: true });
   const entries = await readdir(sourceDir, { withFileTypes: true });
   let copied = 0;

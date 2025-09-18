@@ -10,7 +10,8 @@ function createLogger() {
   return {
     logger: {
       info: (msg) => messages.info.push(msg),
-      warn: (msg) => messages.warn.push(msg)
+      warn: (msg) => messages.warn.push(msg),
+      error: () => {}
     },
     messages
   };
@@ -21,7 +22,8 @@ test('initializeRuleDirectory skips when target is not provided', async () => {
   const result = await initializeRuleDirectory({ env: {}, logger });
   assert.equal(result.status, 'skipped-no-target');
   assert.equal(result.fileCount, 0);
-  assert.equal(messages.info.length, 0);
+  assert.equal(messages.info.length, 1);
+  assert.match(messages.info[0], /No target rule directory specified/);
   assert.equal(messages.warn.length, 0);
 });
 
@@ -36,8 +38,11 @@ test('initializeRuleDirectory creates target even when source missing', async ()
     assert.equal(result.status, 'missing-source');
     assert.equal(result.targetDir, targetDir);
     assert.equal(result.fileCount, 0);
+    assert.equal(messages.info.length, 2);
+    assert.match(messages.info[0], /Rule source directory resolved/);
+    assert.match(messages.info[1], /Rule target directory resolved/);
     assert.equal(messages.warn.length, 1);
-
+    
     const targetStats = await stat(targetDir);
     assert.ok(targetStats.isDirectory());
   } finally {
@@ -62,7 +67,10 @@ test('initializeRuleDirectory copies files recursively', async () => {
     assert.equal(result.status, 'initialized');
     assert.equal(result.fileCount, 2);
     assert.equal(messages.warn.length, 0);
-    assert.equal(messages.info.length, 1);
+    assert.equal(messages.info.length, 3);
+    assert.match(messages.info[0], /Rule source directory resolved/);
+    assert.match(messages.info[1], /Rule target directory resolved/);
+    assert.match(messages.info[2], /Rules initialized at/);
 
     const rootContent = await readFile(join(targetDir, 'root.md'), 'utf8');
     const childContent = await readFile(join(targetDir, 'nested', 'child.md'), 'utf8');

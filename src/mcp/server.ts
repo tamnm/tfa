@@ -10,6 +10,7 @@ import TaskService from "../services/taskService.js";
 import KnowledgeService from "../services/knowledgeService.js";
 import { HashEmbedder, TransformersEmbedder } from "../embedding/embeddings.js";
 import { initializeRuleDirectory } from "../prompts/ruleInitializer.js";
+import { createLogger } from "../utils/logger.js";
 import {
   completeTaskInputSchema,
   createJobInputSchema,
@@ -30,6 +31,7 @@ import {
 
 const NAME = "tfa-mcp";
 const VERSION = "0.1.0";
+const serverLogger = createLogger('Server', {console: {enabled: false}, file: {enabled: true}});
 
 async function start() {
   const mcp = new McpServer({ name: NAME, version: VERSION });
@@ -263,18 +265,19 @@ async function selectEmbedderFromEnv() {
   const cacheDir = process.env.TFA_EMBED_CACHE;
   const quantized = parseBoolEnv(process.env.TFA_EMBED_QUANTIZED, true);
   const normalize = parseBoolEnv(process.env.TFA_EMBED_NORMALIZE, true);
-  
+  const embeddingLogger = createLogger('Embeddings');
+
   try {
-    const embedder = new TransformersEmbedder({ modelId, cacheDir, quantized, normalize });
+    const embedder = new TransformersEmbedder({ modelId, cacheDir, quantized, normalize, logger: embeddingLogger });
     // Test initialization
     await embedder.embed('test');
-    console.log(`✅ Using TransformersEmbedder: ${modelId}`);
+    embeddingLogger.info(`Using TransformersEmbedder: ${modelId ?? 'default'}`);
     return embedder;
-  } catch (error) {
-    console.warn(`⚠️  TransformersEmbedder failed (${error.message}), falling back to HashEmbedder`);
+  } catch (error: any) {
+    embeddingLogger.warn(`TransformersEmbedder failed (${error?.message ?? error}); falling back to HashEmbedder`);
   }
-  
-  console.log('✅ Using HashEmbedder fallback');
+
+  embeddingLogger.info('Using HashEmbedder fallback');
   return new HashEmbedder(256);
 }
 
@@ -287,6 +290,6 @@ function parseBoolEnv(val: string | undefined, def: boolean): boolean {
 }
 
 start().catch(err => {
-  console.error(err?.stack || err?.message || String(err));
+  serverLogger.error(err?.stack || err?.message || String(err));
   process.exit(1);
 });

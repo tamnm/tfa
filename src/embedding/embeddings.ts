@@ -1,6 +1,8 @@
 import { pipeline, FeatureExtractionPipeline } from '@xenova/transformers';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'node:url';
+import { createLogger, Logger } from '../utils/logger.js';
 
 export interface EmbeddingsConfig {
   modelId: string;
@@ -8,6 +10,7 @@ export interface EmbeddingsConfig {
   normalize?: boolean;
   quantized?: boolean;
   pipelineFactory?: typeof pipeline;
+  logger?: Logger;
 }
 
 export interface EmbeddingsGenerator {
@@ -25,10 +28,19 @@ export class TransformersEmbedder implements EmbeddingsGenerator {
   private quantized: boolean;
   private normalize: boolean;
   private pipelineFactory: typeof pipeline;
+  private logger: Logger;
 
   constructor(cfg: EmbeddingsConfig) {
     this.modelId = cfg.modelId || 'Xenova/all-MiniLM-L6-v2';
-    this.cacheDir = cfg.cacheDir || '.tfa/models';
+    const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+    const projectRoot = path.resolve(moduleDir, '..', '..');
+    const providedCacheDir = cfg.cacheDir;
+    const configuredCacheDir = providedCacheDir
+      ? (path.isAbsolute(providedCacheDir) ? providedCacheDir : path.resolve(projectRoot, providedCacheDir))
+      : path.resolve(projectRoot, '.tfa', 'models');
+    this.cacheDir = configuredCacheDir;
+    this.logger = cfg.logger ?? createLogger('Embeddings');
+    this.logger.info(`cache directory resolved to: ${this.cacheDir}`);
     this.quantized = cfg.quantized !== false;
     this.normalize = cfg.normalize !== false;
     this.pipelineFactory = cfg.pipelineFactory ?? pipeline;
@@ -42,7 +54,7 @@ export class TransformersEmbedder implements EmbeddingsGenerator {
     }
 
     try {
-      console.log(`initializing model: ${this.modelId} into ${this.cacheDir}`);
+      this.logger.info(`initializing model: ${this.modelId} into ${this.cacheDir}`);
       
       this.extractor = await this.pipelineFactory(
         'feature-extraction',
@@ -52,9 +64,9 @@ export class TransformersEmbedder implements EmbeddingsGenerator {
           cache_dir: this.cacheDir
         }
       );
-    } catch (error) {
-      console.warn(`Pipeline fetch failed: ${error.message}`);
-      console.log('Attempting direct download...');
+    } catch (error: any) {
+      this.logger.warn(`Pipeline fetch failed: ${error?.message ?? error}`);
+      this.logger.info('Attempting direct download...');
       
       await this.downloadModelDirect();
       
@@ -97,7 +109,7 @@ export class TransformersEmbedder implements EmbeddingsGenerator {
       }
       
       if (!fs.existsSync(filePath)) {
-        console.log(`Downloading ${file}...`);
+        this.logger.info(`Downloading ${file}...`);
         await this.downloadFile(`${baseUrl}/${file}`, filePath);
       }
     }
