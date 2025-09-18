@@ -32,7 +32,7 @@ import {
 const NAME = "tfa-mcp";
 const VERSION = "0.1.0";
 
-configureLogger({ console: { enabled: false }, file: { enabled: true } });
+configureLogger({console:{enabled:false}, file:{enabled:true }});
 const serverLogger = createLogger('Server');
 
 async function start() {
@@ -246,7 +246,7 @@ async function start() {
 
   const transport = new StdioServerTransport();
   await mcp.connect(transport);
-
+  serverLogger.info(`${NAME} v${VERSION} ready`);
   // Keep process alive on stdio
   setupSignalHandlers();
 }
